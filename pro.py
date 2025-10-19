@@ -1,70 +1,77 @@
-import tkinter as tk
-from tkinter import filedialog, Label
+import streamlit as st
+import tempfile
 import cv2
-from PIL import Image, ImageTk
 from ultralytics import YOLO
-import threading
+from PIL import Image
+import os
 
-# Load the YOLOv8 model
-model_path = "C:/Users/Muneeb Azad/Desktop/pro/best.pt"
-model = YOLO(model_path)
+# ---------------------------
+# Load YOLO model
+# ---------------------------
+MODEL_PATH = "best.pt"  # Place your model file in the same directory
+model = YOLO(MODEL_PATH)
 
-class VideoApp:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("Object Detection in Video")
-        self.root.geometry("800x600")
+# ---------------------------
+# Streamlit UI
+# ---------------------------
+st.set_page_config(page_title="YOLOv8 Video Object Detection", layout="wide")
+st.title("🎥 YOLOv8 Video Object Detection App")
 
-        self.label = Label(root)
-        self.label.pack()
+st.markdown(
+    """
+    Upload a video file below, and the app will run object detection frame-by-frame using your YOLOv8 model.  
+    💡 Works best with short videos (<30 seconds) for cloud deployment.
+    """
+)
 
-        self.upload_button = tk.Button(root, text="Upload Video", command=self.upload_video)
-        self.upload_button.pack()
+uploaded_video = st.file_uploader("📁 Upload a video", type=["mp4", "mov", "avi", "mkv"])
 
-    def upload_video(self):
-        video_path = filedialog.askopenfilename()
-        if video_path:
-            threading.Thread(target=self.process_video, args=(video_path,)).start()
+# ---------------------------
+# Process video if uploaded
+# ---------------------------
+if uploaded_video:
+    # Save video temporarily
+    temp_dir = tempfile.mkdtemp()
+    video_path = os.path.join(temp_dir, uploaded_video.name)
+    with open(video_path, "wb") as f:
+        f.write(uploaded_video.read())
 
-    def process_video(self, video_path):
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            print("Error: Could not open video.")
-            return
+    st.video(video_path)
 
-        while cap.isOpened():
-            ret, frame = cap.read()
-            if not ret:
-                break
+    st.write("🔍 Running YOLOv8 detection...")
+    output_path = os.path.join(temp_dir, "output.mp4")
 
-            # Run the model on the frame
-            results = model(frame)
+    # OpenCV video processing
+    cap = cv2.VideoCapture(video_path)
+    fps = int(cap.get(cv2.CAP_PROP_FPS))
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
 
-            # Draw bounding boxes and labels on the frame
-            for result in results:
-                for bbox in result.boxes:
-                    x1, y1, x2, y2 = map(int, bbox.xyxy[0])
-                    label = model.names[int(bbox.cls[0])]
-                    confidence = bbox.conf[0]
-                    color = (0, 255, 0)  # Green color for bounding box
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-                    cv2.putText(frame, f"{label} {confidence:.2f}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+    progress_bar = st.progress(0)
+    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    count = 0
 
-            # Convert the frame to RGB
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            img = Image.fromarray(frame_rgb)
-            imgtk = ImageTk.PhotoImage(image=img)
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
 
-            # Display the frame
-            self.label.imgtk = imgtk
-            self.label.configure(image=imgtk)
+        # YOLO detection
+        results = model(frame)
+        annotated_frame = results[0].plot()
 
-            # Update the GUI
-            self.root.update_idletasks()
+        out.write(annotated_frame)
+        count += 1
+        progress_bar.progress(count / frame_count)
 
-        cap.release()
+    cap.release()
+    out.release()
 
-if __name__ == "__main__":
-    root = tk.Tk()
-    app = VideoApp(root)
-    root.mainloop()
+    st.success("✅ Detection complete!")
+    st.video(output_path)
+    st.download_button("⬇️ Download processed video", open(output_path, "rb"), file_name="detected_output.mp4")
+
+else:
+    st.info("Please upload a video file to start detection.")
